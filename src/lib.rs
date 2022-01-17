@@ -6,6 +6,8 @@ use crate::account::Account;
 mod account;
 mod storage_impl;
 mod utils;
+mod vesting;
+mod views;
 
 #[derive(BorshSerialize, BorshStorageKey)]
 pub(crate) enum StorageKey {
@@ -21,7 +23,6 @@ struct Contract {
 
 #[near_bindgen]
 impl Contract {
-
     #[init]
     pub fn new(owner_id: AccountId) -> Self {
         Self {

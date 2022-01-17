@@ -62,11 +62,12 @@ impl Account {
 
     /// Moves given amount from amount_locked to amount_claimed
     pub(crate) fn claim(&mut self, amount: Balance) {
-        if let Some(result) = self.amount_locked.checked_sub(amount) {
-            self.amount_claimed
-                .checked_add(amount)
-                .expect("ERR: Integer overflow occurred");
-            self.amount_locked = result;
+        if let Some(locked_result) = self.amount_locked.checked_sub(amount) {
+            if let Some(claimed_result) = self.amount_claimed.checked_add(amount) {
+                self.amount_claimed = claimed_result;
+                self.amount_locked = locked_result;
+            }
+            log!("{} tokens was claimed", amount);
         } else {
             env::panic_str("ERR: Not enough tokens locked")
         }
@@ -109,6 +110,15 @@ impl Account {
     pub fn min_storage_usage() -> Balance {
         INIT_ACCOUNT_STORAGE as Balance * env::storage_byte_cost()
     }
+
+    /// Deposits to claim. Should only be use to refund after failed operation
+    pub(self) fn deposit_to_claim(&mut self, amount: Balance) {
+        if let Some(result) = self.amount_claimed.checked_add(amount) {
+            self.amount_claimed = result
+        } else {
+            env::panic_str("ERR: integer overflow")
+        }
+    }
 }
 
 #[near_bindgen]
@@ -136,7 +146,7 @@ impl Contract {
             PromiseResult::Failed => {
                 if let Some(mut account) = self.internal_get_account(&sender_id) {
                     if account.storage_usage() <= account.near_amount {
-                        account.deposit(amount.0);
+                        account.deposit_to_claim(amount.0);
                         self.accounts.insert(&sender_id, &account);
                     } else {
                         log!(
@@ -166,10 +176,17 @@ impl Contract {
         self.internal_save_account(account_id, account);
     }
 
-    /// Deposits given amount of the account and saves account
+    /// Deposits given amount to the account and saves account
     pub fn internal_deposit(&mut self, sender_id: &AccountId, amount: Balance) {
         let mut account = self.internal_unwrap_account(sender_id);
         account.deposit(amount);
+        self.internal_save_account(&sender_id, account);
+    }
+
+    /// Claims given amount to the account and saves account
+    pub fn internal_claim(&mut self, sender_id: &AccountId, amount: Balance) {
+        let mut account = self.internal_unwrap_account(sender_id);
+        account.claim(amount);
         self.internal_save_account(&sender_id, account);
     }
 
@@ -211,7 +228,7 @@ impl Contract {
         self.accounts.insert(&account_id, &account);
     }
 
-    /// Returns balance of given account
+    /// Returns balance of given account. First is locked and second is claimed
     pub fn internal_get_balance(&self, account_id: &AccountId) -> (Balance, Balance) {
         self.internal_unwrap_account(account_id).get_balance()
     }
@@ -219,7 +236,7 @@ impl Contract {
     /// Deposits given amount to the owners address
     fn internal_lost_and_found(&mut self, amount: Balance) {
         let mut lost_and_found = self.internal_unwrap_or_default_account(&self.owner_id);
-        lost_and_found.deposit(amount);
+        lost_and_found.deposit_to_claim(amount);
         self.accounts.insert(&self.owner_id, &lost_and_found.into());
     }
 
